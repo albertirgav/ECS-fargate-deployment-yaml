@@ -1,0 +1,64 @@
+name: Deploy Application to AWS ECS (Fargate)
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  AWS_REGION: region
+  ECR_REPOSITORY: Repo-Name
+  ECS_CLUSTER: Cluster-Name
+  FRONTEND_SERVICE: frontend-service-name
+  BACKEND_SERVICE: backend-service-name
+  FRONTEND_TASK: frontend-task-name
+  BACKEND_TASK: backend-task-name
+
+jobs:
+  deploy:
+    name: Build & Deploy
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # ---------- BACKEND ----------
+      - name: Build & Push Backend Image
+        run: |
+          docker build -t $ECR_REPOSITORY:backend ./backend
+          docker tag $ECR_REPOSITORY:backend ${{ steps.login-ecr.outputs.registry }}/$ECR_REPOSITORY:backend
+          docker push ${{ steps.login-ecr.outputs.registry }}/$ECR_REPOSITORY:backend
+
+      # ---------- FRONTEND ----------
+      - name: Build & Push Frontend Image
+        run: |
+          docker build -t $ECR_REPOSITORY:frontend ./frontend
+          docker tag $ECR_REPOSITORY:frontend ${{ steps.login-ecr.outputs.registry }}/$ECR_REPOSITORY:frontend
+          docker push ${{ steps.login-ecr.outputs.registry }}/$ECR_REPOSITORY:frontend
+
+      # ---------- DEPLOY BACKEND ----------
+      - name: Deploy Backend to ECS
+        run: |
+          aws ecs update-service \
+            --cluster $ECS_CLUSTER \
+            --service $BACKEND_SERVICE \
+            --force-new-deployment
+
+      # ---------- DEPLOY FRONTEND ----------
+      - name: Deploy Frontend to ECS
+        run: |
+          aws ecs update-service \
+            --cluster $ECS_CLUSTER \
+            --service $FRONTEND_SERVICE \
+            --force-new-deployment
