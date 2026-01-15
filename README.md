@@ -6,7 +6,7 @@ This repository is designed with **production-ready DevOps practices**:
 
 * Single ECR repository
 * Separate frontend & backend services
-* Automated build & deploy on every `main` branch push
+* Automated build & deploy on every `master` branch push
 
 ---
 
@@ -106,10 +106,10 @@ The IAM user should have at least:
 
 Deployment is fully automated.
 
-Simply push to `main`:
+Simply push to `master`:
 
 ```bash
-git push origin main
+git push origin master
 ```
 
 GitHub Actions will handle the rest.
