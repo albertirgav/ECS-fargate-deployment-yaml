@@ -1,81 +1,113 @@
-name: Deploy Application to AWS ECS (Fargate)
+name: Build and Push FE & Node to ECR and Deploy to ECS
 
 on:
-push:
-branches:
-- main
-paths:
-- 'backend/**'
-- 'frontend/**'
+  push:
+    branches: [master]
 
-env:
-AWS_REGION: region
-ECR_REPOSITORY: Repo-Name
-ECS_CLUSTER: Cluster-Name
-FRONTEND_SERVICE: frontend-service-name
-BACKEND_SERVICE: backend-service-name
-
+#For The Backend Application
 jobs:
-deploy:
-name: Build & Deploy (Selective)
-runs-on: ubuntu-latest
+  backend:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # Necessary for OIDC 
+      contents: read
+    steps:
+      - uses: actions/checkout@v3
 
-```
-steps:
-  - name: Checkout source code
-    uses: actions/checkout@v4
+      - name: Check if backend changed
+        id: backend_changed
+        uses: tj-actions/changed-files@v41
+        with:
+          files: |
+            Node/**
+            backend-task.json
 
-  - name: Detect changed paths
-    id: changes
-    uses: dorny/paths-filter@v3
-    with:
-      filters: |
-        backend:
-          - 'backend/**'
-        frontend:
-          - 'frontend/**'
+      - name: Configure AWS credentials
+        if: steps.backend_changed.outputs.any_changed == 'true'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: eu-central-1 #example
 
-  - name: Configure AWS credentials
-    if: steps.changes.outputs.backend == 'true' || steps.changes.outputs.frontend == 'true'
-    uses: aws-actions/configure-aws-credentials@v4
-    with:
-      aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-      aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-      aws-region: ${{ env.AWS_REGION }}
+      - name: Login to ECR
+        if: steps.backend_changed.outputs.any_changed == 'true'
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
 
-  - name: Login to Amazon ECR
-    if: steps.changes.outputs.backend == 'true' || steps.changes.outputs.frontend == 'true'
-    uses: aws-actions/amazon-ecr-login@v2
+      - name: Build & Push Backend
+        if: steps.backend_changed.outputs.any_changed == 'true'
+        run: |
+          IMAGE_URI="${{ steps.login-ecr.outputs.registry }}/repo-name:backend-tag"
+          docker build -t $IMAGE_URI -f Node/Dockerfile ./Node
+          docker push $IMAGE_URI
 
-  # ---------- BACKEND ----------
-  - name: Build & Push Backend Image
-    if: steps.changes.outputs.backend == 'true'
-    run: |
-      docker build -t $ECR_REPOSITORY:backend ./backend
-      docker tag $ECR_REPOSITORY:backend ${{ steps.login-ecr.outputs.registry }}/$ECR_REPOSITORY:backend
-      docker push ${{ steps.login-ecr.outputs.registry }}/$ECR_REPOSITORY:backend
+      - name: Backend Task Definition
+        if: steps.backend_changed.outputs.any_changed == 'true'
+        id: render-backend
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: backend-task.json
+          container-name: container-name
+          image: ${{ steps.login-ecr.outputs.registry }}/repo-name:backend-tag
 
-  - name: Deploy Backend to ECS
-    if: steps.changes.outputs.backend == 'true'
-    run: |
-      aws ecs update-service \
-        --cluster $ECS_CLUSTER \
-        --service $BACKEND_SERVICE \
-        --force-new-deployment
+      - name: Deploy Backend to ECS
+        if: steps.backend_changed.outputs.any_changed == 'true'
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+        with:
+          task-definition: ${{ steps.render-backend.outputs.task-definition }}
+          service: service-name
+          cluster: cluster-name
+          wait-for-service-stability: false
+#For The Front End Application
+  frontend:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # 
+      contents: read
+    steps:
+      - uses: actions/checkout@v3
 
-  # ---------- FRONTEND ----------
-  - name: Build & Push Frontend Image
-    if: steps.changes.outputs.frontend == 'true'
-    run: |
-      docker build -t $ECR_REPOSITORY:frontend ./frontend
-      docker tag $ECR_REPOSITORY:frontend ${{ steps.login-ecr.outputs.registry }}/$ECR_REPOSITORY:frontend
-      docker push ${{ steps.login-ecr.outputs.registry }}/$ECR_REPOSITORY:frontend
+      - name: Check if frontend changed
+        id: frontend_changed
+        uses: tj-actions/changed-files@v41
+        with:
+          files: |
+            FE/**
+            frontend-task.json
 
-  - name: Deploy Frontend to ECS
-    if: steps.changes.outputs.frontend == 'true'
-    run: |
-      aws ecs update-service \
-        --cluster $ECS_CLUSTER \
-        --service $FRONTEND_SERVICE \
-        --force-new-deployment
-```
+      - name: Configure AWS credentials
+        if: steps.frontend_changed.outputs.any_changed == 'true'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: eu-central-1
+
+      - name: Login to ECR
+        if: steps.frontend_changed.outputs.any_changed == 'true'
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build & Push Frontend
+        if: steps.frontend_changed.outputs.any_changed == 'true'
+        run: |
+          IMAGE_URI="${{ steps.login-ecr.outputs.registry }}/repo-name:frontend-tag"
+          docker build -t $IMAGE_URI -f FE/Dockerfile ./FE
+          docker push $IMAGE_URI
+
+      - name: Frontend Task Definition
+        if: steps.frontend_changed.outputs.any_changed == 'true'
+        id: render-frontend
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-defination-name.json
+          container-name: container-name
+          image: ${{ steps.login-ecr.outputs.registry }}/repo-name:frontend-tag
+
+      - name: Deploy Frontend to ECS
+        if: steps.frontend_changed.outputs.any_changed == 'true'
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+        with:
+          task-definition: ${{ steps.render-frontend.outputs.task-definition }}
+          service: service-name
+          cluster: cluster-name
+          wait-for-service-stability: false
